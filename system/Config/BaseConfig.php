@@ -1,22 +1,44 @@
 <?php
 
+
 /**
- * This file is part of CodeIgniter 4 framework.
+ * CodeIgniter
  *
- * (c) CodeIgniter Foundation <admin@codeigniter.com>
+ * An open source application development framework for PHP
  *
- * For the full copyright and license information, please view
- * the LICENSE file that was distributed with this source code.
+ * This content is released under the MIT License (MIT)
+ *
+ * Copyright (c) 2014-2019 British Columbia Institute of Technology
+ * Copyright (c) 2019-2020 CodeIgniter Foundation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * @package    CodeIgniter
+ * @author     CodeIgniter Dev Team
+ * @copyright  2019-2020 CodeIgniter Foundation
+ * @license    https://opensource.org/licenses/MIT	MIT License
+ * @link       https://codeigniter.com
+ * @since      Version 4.0.0
+ * @filesource
  */
 
 namespace CodeIgniter\Config;
-
-use Config\Encryption;
-use Config\Modules;
-use Config\Services;
-use ReflectionClass;
-use ReflectionException;
-use RuntimeException;
 
 /**
  * Class BaseConfig
@@ -26,219 +48,200 @@ use RuntimeException;
  * from the environment.
  *
  * These can be set within the .env file.
- *
- * @phpstan-consistent-constructor
  */
 class BaseConfig
 {
-    /**
-     * An optional array of classes that will act as Registrars
-     * for rapidly setting config class properties.
-     *
-     * @var array
-     */
-    public static $registrars = [];
 
-    /**
-     * Whether to override properties by Env vars and Registrars.
-     */
-    public static bool $override = true;
+	/**
+	 * An optional array of classes that will act as Registrars
+	 * for rapidly setting config class properties.
+	 *
+	 * @var array
+	 */
+	public static $registrars = [];
 
-    /**
-     * Has module discovery happened yet?
-     *
-     * @var bool
-     */
-    protected static $didDiscovery = false;
+	/**
+	 * Has module discovery happened yet?
+	 *
+	 * @var boolean
+	 */
+	protected static $didDiscovery = false;
 
-    /**
-     * The modules configuration.
-     *
-     * @var Modules
-     */
-    protected static $moduleConfig;
+	/**
+	 * The modules configuration.
+	 *
+	 * @var type
+	 */
+	protected static $moduleConfig;
 
-    public static function __set_state(array $array)
-    {
-        static::$override = false;
-        $obj              = new static();
-        static::$override = true;
+	/**
+	 * Will attempt to get environment variables with names
+	 * that match the properties of the child class.
+	 *
+	 * The "shortPrefix" is the lowercase-only config class name.
+	 */
+	public function __construct()
+	{
+		static::$moduleConfig = config('Modules');
 
-        $properties = array_keys(get_object_vars($obj));
+		$properties  = array_keys(get_object_vars($this));
+		$prefix      = get_class($this);
+		$slashAt     = strrpos($prefix, '\\');
+		$shortPrefix = strtolower(substr($prefix, $slashAt === false ? 0 : $slashAt + 1));
 
-        foreach ($properties as $property) {
-            $obj->{$property} = $array[$property];
-        }
+		foreach ($properties as $property)
+		{
+			$this->initEnvValue($this->$property, $property, $prefix, $shortPrefix);
 
-        return $obj;
-    }
+			// Handle hex2bin prefix
+                      if ($shortPrefix === 'encryption' && $property === 'key' && strpos($this->$property, 'hex2bin:') === 0)
+			{
+				$this->$property = hex2bin(substr($this->$property, 8));
+			}
+		}
 
-    /**
-     * Will attempt to get environment variables with names
-     * that match the properties of the child class.
-     *
-     * The "shortPrefix" is the lowercase-only config class name.
-     */
-    public function __construct()
-    {
-        static::$moduleConfig = config(Modules::class);
+		if (defined('ENVIRONMENT') && ENVIRONMENT !== 'testing')
+		{
+			// well, this won't happen during unit testing
+			// @codeCoverageIgnoreStart
+			$this->registerProperties();
+			// @codeCoverageIgnoreEnd
+		}
+	}
 
-        if (! static::$override) {
-            return;
-        }
+	//--------------------------------------------------------------------
 
-        $this->registerProperties();
+	/**
+	 * Initialization an environment-specific configuration setting
+	 *
+	 * @param mixed  &$property
+	 * @param string $name
+	 * @param string $prefix
+	 * @param string $shortPrefix
+	 *
+	 * @return mixed
+	 */
+	protected function initEnvValue(&$property, string $name, string $prefix, string $shortPrefix)
+	{
+		if (is_array($property))
+		{
+			foreach ($property as $key => $val)
+			{
+				$this->initEnvValue($property[$key], "{$name}.{$key}", $prefix, $shortPrefix);
+			}
+		}
+		else
+		{
+			if (($value = $this->getEnvValue($name, $prefix, $shortPrefix)) !== false)
+			{
+				if (! is_null($value))
+				{
+					if ($value === 'false')
+					{
+						$value = false;
+					}
+					elseif ($value === 'true')
+					{
+						$value = true;
+					}
 
-        $properties  = array_keys(get_object_vars($this));
-        $prefix      = static::class;
-        $slashAt     = strrpos($prefix, '\\');
-        $shortPrefix = strtolower(substr($prefix, $slashAt === false ? 0 : $slashAt + 1));
+					$property = is_bool($value) ? $value : trim($value, '\'"');
+				}
+			}
+		}
+		return $property;
+	}
 
-        foreach ($properties as $property) {
-            $this->initEnvValue($this->{$property}, $property, $prefix, $shortPrefix);
+	//--------------------------------------------------------------------
 
-            if ($this instanceof Encryption && $property === 'key') {
-                if (strpos($this->{$property}, 'hex2bin:') === 0) {
-                    // Handle hex2bin prefix
-                    $this->{$property} = hex2bin(substr($this->{$property}, 8));
-                } elseif (strpos($this->{$property}, 'base64:') === 0) {
-                    // Handle base64 prefix
-                    $this->{$property} = base64_decode(substr($this->{$property}, 7), true);
-                }
-            }
-        }
-    }
+	/**
+	 * Retrieve an environment-specific configuration setting
+	 *
+	 * @param string $property
+	 * @param string $prefix
+	 * @param string $shortPrefix
+	 *
+	 * @return mixed
+	 */
+	protected function getEnvValue(string $property, string $prefix, string $shortPrefix)
+	{
+		$shortPrefix = ltrim($shortPrefix, '\\');
+		switch (true)
+		{
+			case array_key_exists("{$shortPrefix}.{$property}", $_ENV):
+				return $_ENV["{$shortPrefix}.{$property}"];
+			case array_key_exists("{$shortPrefix}.{$property}", $_SERVER):
+				return $_SERVER["{$shortPrefix}.{$property}"];
+			case array_key_exists("{$prefix}.{$property}", $_ENV):
+				return $_ENV["{$prefix}.{$property}"];
+			case array_key_exists("{$prefix}.{$property}", $_SERVER):
+				return $_SERVER["{$prefix}.{$property}"];
+			default:
+				$value = getenv($property);
+				return $value === false ? null : $value;
+		}
+	}
 
-    /**
-     * Initialization an environment-specific configuration setting
-     *
-     * @param array|bool|float|int|string|null $property
-     *
-     * @return void
-     */
-    protected function initEnvValue(&$property, string $name, string $prefix, string $shortPrefix)
-    {
-        if (is_array($property)) {
-            foreach (array_keys($property) as $key) {
-                $this->initEnvValue($property[$key], "{$name}.{$key}", $prefix, $shortPrefix);
-            }
-        } elseif (($value = $this->getEnvValue($name, $prefix, $shortPrefix)) !== false && $value !== null) {
-            if ($value === 'false') {
-                $value = false;
-            } elseif ($value === 'true') {
-                $value = true;
-            }
-            if (is_bool($value)) {
-                $property = $value;
+	//--------------------------------------------------------------------
 
-                return;
-            }
+	/**
+	 * Provides external libraries a simple way to register one or more
+	 * options into a config file.
+	 *
+	 * @throws \ReflectionException
+	 */
+	protected function registerProperties()
+	{
+		if (! static::$moduleConfig->shouldDiscover('registrars'))
+		{
+			return;
+		}
 
-            $value = trim($value, '\'"');
+		if (! static::$didDiscovery)
+		{
+			$locator         = \Config\Services::locator();
+			$registrarsFiles = $locator->search('Config/Registrar.php');
 
-            if (is_int($property)) {
-                $value = (int) $value;
-            } elseif (is_float($property)) {
-                $value = (float) $value;
-            }
+			foreach ($registrarsFiles as $file)
+			{
+				$className            = $locator->getClassname($file);
+				static::$registrars[] = new $className();
+			}
 
-            $property = $value;
-        }
-    }
+			static::$didDiscovery = true;
+		}
 
-    /**
-     * Retrieve an environment-specific configuration setting
-     *
-     * @return string|null
-     */
-    protected function getEnvValue(string $property, string $prefix, string $shortPrefix)
-    {
-        $shortPrefix        = ltrim($shortPrefix, '\\');
-        $underscoreProperty = str_replace('.', '_', $property);
+		$shortName = (new \ReflectionClass($this))->getShortName();
 
-        switch (true) {
-            case array_key_exists("{$shortPrefix}.{$property}", $_ENV):
-                return $_ENV["{$shortPrefix}.{$property}"];
+		// Check the registrar class for a method named after this class' shortName
+		foreach (static::$registrars as $callable)
+		{
+			// ignore non-applicable registrars
+			if (! method_exists($callable, $shortName))
+			{
+				continue;
+			}
 
-            case array_key_exists("{$shortPrefix}_{$underscoreProperty}", $_ENV):
-                return $_ENV["{$shortPrefix}_{$underscoreProperty}"];
+			$properties = $callable::$shortName();
 
-            case array_key_exists("{$shortPrefix}.{$property}", $_SERVER):
-                return $_SERVER["{$shortPrefix}.{$property}"];
+			if (! is_array($properties))
+			{
+				throw new \RuntimeException('Registrars must return an array of properties and their values.');
+			}
 
-            case array_key_exists("{$shortPrefix}_{$underscoreProperty}", $_SERVER):
-                return $_SERVER["{$shortPrefix}_{$underscoreProperty}"];
+			foreach ($properties as $property => $value)
+			{
+				if (isset($this->$property) && is_array($this->$property) && is_array($value))
+				{
+					$this->$property = array_merge($this->$property, $value);
+				}
+				else
+				{
+					$this->$property = $value;
+				}
+			}
+		}
+	}
 
-            case array_key_exists("{$prefix}.{$property}", $_ENV):
-                return $_ENV["{$prefix}.{$property}"];
-
-            case array_key_exists("{$prefix}_{$underscoreProperty}", $_ENV):
-                return $_ENV["{$prefix}_{$underscoreProperty}"];
-
-            case array_key_exists("{$prefix}.{$property}", $_SERVER):
-                return $_SERVER["{$prefix}.{$property}"];
-
-            case array_key_exists("{$prefix}_{$underscoreProperty}", $_SERVER):
-                return $_SERVER["{$prefix}_{$underscoreProperty}"];
-
-            default:
-                $value = getenv("{$shortPrefix}.{$property}");
-                $value = $value === false ? getenv("{$shortPrefix}_{$underscoreProperty}") : $value;
-                $value = $value === false ? getenv("{$prefix}.{$property}") : $value;
-                $value = $value === false ? getenv("{$prefix}_{$underscoreProperty}") : $value;
-
-                return $value === false ? null : $value;
-        }
-    }
-
-    /**
-     * Provides external libraries a simple way to register one or more
-     * options into a config file.
-     *
-     * @return void
-     *
-     * @throws ReflectionException
-     */
-    protected function registerProperties()
-    {
-        if (! static::$moduleConfig->shouldDiscover('registrars')) {
-            return;
-        }
-
-        if (! static::$didDiscovery) {
-            $locator         = Services::locator();
-            $registrarsFiles = $locator->search('Config/Registrar.php');
-
-            foreach ($registrarsFiles as $file) {
-                $className            = $locator->getClassname($file);
-                static::$registrars[] = new $className();
-            }
-
-            static::$didDiscovery = true;
-        }
-
-        $shortName = (new ReflectionClass($this))->getShortName();
-
-        // Check the registrar class for a method named after this class' shortName
-        foreach (static::$registrars as $callable) {
-            // ignore non-applicable registrars
-            if (! method_exists($callable, $shortName)) {
-                continue; // @codeCoverageIgnore
-            }
-
-            $properties = $callable::$shortName();
-
-            if (! is_array($properties)) {
-                throw new RuntimeException('Registrars must return an array of properties and their values.');
-            }
-
-            foreach ($properties as $property => $value) {
-                if (isset($this->{$property}) && is_array($this->{$property}) && is_array($value)) {
-                    $this->{$property} = array_merge($this->{$property}, $value);
-                } else {
-                    $this->{$property} = $value;
-                }
-            }
-        }
-    }
+	//--------------------------------------------------------------------
 }
